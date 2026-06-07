@@ -8,7 +8,7 @@
 | **Student** | Akash Tiloda |
 | **Project** | [PyLabRobot/pylabrobot](https://github.com/PyLabRobot/pylabrobot) |
 | **Issue** | [#719 — resources should have a preferred_pickup_distance_from_top attribute](https://github.com/PyLabRobot/pylabrobot/issues/719) |
-| **Status** | Phase I — In Progress |
+| **Status** | Phase II — In Progress |
 
 ---
 
@@ -55,18 +55,42 @@ From the maintainer's description, the goal is to "facilitate smart defaults on 
 
 ### Environment Setup
 
-> To be completed in Phase II — will document Python version, virtual environment setup, and `pip install -e .` steps after local environment is confirmed working.
+I cloned my fork and hit two setup mistakes worth documenting for students:
+
+```bash
+git clone https://github.com/Akash-t25/pylabrobot.git
+cd pylabrobot
+```
+
+**Mistake 1 — double `cd`:** I ran `cd pylabrobot` twice and ended up inside `pylabrobot/pylabrobot/`, which has no `setup.py` or `pyproject.toml`. The error message wasn't obvious — worth flagging for students who clone into a folder with the same name as the repo.
+
+**Mistake 2 — `python` vs `python3` on Mac:** Running `python -m venv env` returned "command not found." On macOS, `python3` is required.
+
+**Fix:**
+
+```bash
+cd ..                              # back to the repo root
+python3 -m venv env
+source env/bin/activate
+pip install -e ".[dev]"
+```
+
+Installation completed successfully: `Successfully installed PyLabRobot-0.2.1`.
 
 ### Steps to Reproduce
 
-1. Clone the repository: `git clone https://github.com/PyLabRobot/pylabrobot.git`
-2. Inspect `Resource.__init__` in `pylabrobot/resources/resource.py` — observe that no `preferred_pickup_distance_from_top` parameter exists.
-3. Inspect an existing plate definition (e.g., a 96-well plate file) — observe that no grip-height preference is declared.
-4. Trace the arm movement planner to confirm it has no mechanism to look up a per-resource preferred offset.
+1. Activate the virtual environment and open `pylabrobot/resources/resource.py`.
+2. Inspect `Resource.__init__` — the parameter list is: `name`, `size_x`, `size_y`, `size_z`, `rotation`, `category`, `model`, `barcode`, `preferred_pickup_location`. No `preferred_pickup_distance_from_top`.
+3. Run a repo-wide search for `preferred_pickup_distance_from_top` — zero hits anywhere in the codebase.
+4. The attribute named in issue #719 does not exist. Issue confirmed reproduced.
 
 ### Reproduction Evidence
 
-> To be completed in Phase II — will include code traces, screenshots, and test output confirming the current default-zero behavior.
+A repo-wide search (`grep -r "preferred_pickup_distance_from_top" .`) returns no results, confirming the attribute is entirely absent from the codebase.
+
+![Resource.__init__ showing preferred_pickup_distance_from_top is absent](phase2_proof.png)
+
+**Key discovery during analysis:** The maintainer has already added a related but different attribute — `preferred_pickup_location`, a full `Coordinate(x, y, z)` object. In `pylabrobot/liquid_handling/liquid_handler.py` (lines 2028–2038), the movement planner already derives `pickup_distance_from_top` from `preferred_pickup_location.z` when no explicit offset is provided. This means the "smart default" mechanism the issue describes is partially solved through a different approach. I left a comment on issue #719 asking the maintainer whether a separate `preferred_pickup_distance_from_top: float` is still needed given `preferred_pickup_location` already exists — awaiting response before writing any code.
 
 ---
 
@@ -74,7 +98,28 @@ From the maintainer's description, the goal is to "facilitate smart defaults on 
 
 ### Analysis
 
-> To be completed in Phase II — will include a full trace of the class hierarchy, the movement planner call stack, and a mapping of which resource files need updating.
+`Resource` inherits from `SerializableMixin`, which means serialization goes through `serialize()` and `deserialize()` — not `to_dict`/`from_dict` as I initially assumed in Phase I. Existing optional attributes follow this pattern in `serialize()`:
+
+```python
+"preferred_pickup_location": serialize(self.preferred_pickup_location)
+```
+
+One important downstream consequence: approximately six test files hardcode the complete expected serialization dictionary. Adding any new key to `serialize()` will break all of them simultaneously. This is the largest mechanical cost of the change.
+
+**Files that need to be modified:**
+
+| File | Change required |
+|---|---|
+| `pylabrobot/resources/resource.py` | Add param to `__init__`, docstring, `serialize()`, `deserialize()` |
+| `pylabrobot/liquid_handling/liquid_handler.py` (lines 2028–2038) | Update smart-default fallback chain |
+| `pylabrobot/resources/resource_tests.py` | Serialization tests assert exact dict shape |
+| `pylabrobot/resources/well_tests.py` | Same reason |
+| `pylabrobot/resources/carrier_tests.py` | Same reason |
+| `pylabrobot/resources/container_tests.py` | Same reason |
+| `pylabrobot/resources/plate_adapter_tests.py` | Same reason |
+| `pylabrobot/resources/petri_dish_tests.py` | Same reason |
+
+**Pending:** Awaiting maintainer response on issue #719 before finalizing whether `preferred_pickup_distance_from_top` (float) is needed alongside the existing `preferred_pickup_location` (Coordinate), or whether the solution should take a different shape entirely.
 
 ### Proposed Solution (High Level)
 
@@ -84,7 +129,7 @@ From the maintainer's description, the goal is to "facilitate smart defaults on 
    ```
    Store it as `self.preferred_pickup_distance_from_top`.
 
-2. **Thread it through serialization.** Update `Resource.to_dict()` to include the field, and `Resource.from_dict()` / `deserialize()` to restore it, so resource definitions round-trip correctly through JSON.
+2. **Thread it through serialization.** Update `serialize()` to include the field and `deserialize()` to restore it (the class uses `SerializableMixin`, not `to_dict`/`from_dict`). Update the ~6 test files that hardcode the expected serialization dict.
 
 3. **Update the movement planner.** In the arm movement logic, when computing the pickup offset, fall back to `resource.preferred_pickup_distance_from_top` if no explicit offset was provided by the caller (and fall back to `0` only if the resource also has `None`).
 
@@ -120,7 +165,7 @@ From the maintainer's description, the goal is to "facilitate smart defaults on 
 
 ### Manual Testing
 
-> To be completed in Phase II — will include running the existing PyLabRobot simulator or test fixtures to confirm end-to-end behavior matches expectations before submitting the PR.
+> To be completed in Phase III — will run the existing test suite after implementing the change to confirm no regressions before submitting the PR.
 
 ---
 
@@ -130,14 +175,22 @@ From the maintainer's description, the goal is to "facilitate smart defaults on 
 
 - [x] Identified and researched the issue
 - [x] Read the PyLabRobot paper (Device, 2023) and project documentation
-- [ ] Traced the `Resource` class hierarchy and located `resource.py`
-- [ ] Identified the serialization pattern used by existing attributes
-- [ ] Set up local development environment (Phase II)
-- [ ] Confirmed scope with maintainer via issue comment (Phase II)
+
+### Week 2 Progress
+
+- [x] Forked the repository
+- [x] Cloned fork locally
+- [x] Set up virtual environment and installed with `pip install -e ".[dev]"`
+- [x] Opened `resource.py` and located the `Resource` class
+- [x] Confirmed `preferred_pickup_distance_from_top` does not exist — issue reproduced
+- [x] Discovered `preferred_pickup_location` already exists as a related mechanism
+- [x] Analyzed serialization pattern via `SerializableMixin`
+- [x] Identified all files that need modification
+- [x] Commented on issue #719 asking maintainer for clarification before proceeding
 
 ### Code Changes
 
-> None yet — implementation begins in Phase II.
+> None yet — holding on implementation until maintainer responds to my question on issue #719 about whether `preferred_pickup_distance_from_top` (float) is still needed given `preferred_pickup_location` (Coordinate) already partially solves the problem.
 
 ### Pull Request
 
