@@ -7,8 +7,9 @@
 | **Contribution #** | 1 |
 | **Student** | Akash Tiloda |
 | **Project** | [PyLabRobot/pylabrobot](https://github.com/PyLabRobot/pylabrobot) |
+| **My Fork** | [Akash-t25/pylabrobot](https://github.com/Akash-t25/pylabrobot) |
 | **Issue** | [#719 — resources should have a preferred_pickup_distance_from_top attribute](https://github.com/PyLabRobot/pylabrobot/issues/719) |
-| **Status** | Phase II — In Progress |
+| **Status** | Phase II — Complete |
 
 ---
 
@@ -195,6 +196,7 @@ One important downstream consequence: approximately six test files hardcode the 
 ## Resources Used
 
 - [PyLabRobot GitHub Repository](https://github.com/PyLabRobot/pylabrobot)
+- [My PyLabRobot Fork](https://github.com/Akash-t25/pylabrobot)
 - [Issue #719](https://github.com/PyLabRobot/pylabrobot/issues/719)
 - [PyLabRobot paper — Device (2023)](https://www.cell.com/device/fulltext/S2666-9986(23)00046-4)
 - [PyLabRobot documentation](https://docs.pylabrobot.org)
