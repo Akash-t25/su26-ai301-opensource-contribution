@@ -55,21 +55,9 @@ From the maintainer's description, the goal is to "facilitate smart defaults on 
 
 ### Environment Setup
 
-I cloned my fork and hit two setup mistakes worth documenting for students:
-
 ```bash
 git clone https://github.com/Akash-t25/pylabrobot.git
 cd pylabrobot
-```
-
-**Mistake 1 — double `cd`:** I ran `cd pylabrobot` twice and ended up inside `pylabrobot/pylabrobot/`, which has no `setup.py` or `pyproject.toml`. The error message wasn't obvious — worth flagging for students who clone into a folder with the same name as the repo.
-
-**Mistake 2 — `python` vs `python3` on Mac:** Running `python -m venv env` returned "command not found." On macOS, `python3` is required.
-
-**Fix:**
-
-```bash
-cd ..                              # back to the repo root
 python3 -m venv env
 source env/bin/activate
 pip install -e ".[dev]"
