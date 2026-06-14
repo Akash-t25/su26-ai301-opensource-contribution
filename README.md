@@ -1,4 +1,4 @@
-# Contribution #1: Add `preferred_pickup_distance_from_top` Attribute to PyLabRobot Resource Class
+# Contribution #1: Implementing ZipStore's `__delitem__` via Overwrite in zarr-python
 
 ---
 
@@ -6,18 +6,18 @@
 |---|---|
 | **Contribution #** | 1 |
 | **Student** | Akash Tiloda |
-| **Project** | [PyLabRobot/pylabrobot](https://github.com/PyLabRobot/pylabrobot) |
-| **My Fork** | [Akash-t25/pylabrobot](https://github.com/Akash-t25/pylabrobot) |
-| **Issue** | [#719 — resources should have a preferred_pickup_distance_from_top attribute](https://github.com/PyLabRobot/pylabrobot/issues/719) |
-| **Status** | Phase II — Complete |
+| **Project** | [zarr-developers/zarr-python](https://github.com/zarr-developers/zarr-python) |
+| **My Fork** | [Akash-t25/zarr-python](https://github.com/Akash-t25/zarr-python) |
+| **Issue** | [#828 — Implementing ZipStore's \_\_delitem\_\_ via overwrite](https://github.com/zarr-developers/zarr-python/issues/828) |
+| **Status** | Phase I — In Progress |
 
 ---
 
 ## Why I Chose This Issue
 
-When I came across PyLabRobot, the topic immediately stood out. An open-source SDK that translates Python code into precise robotic arm movements used in real research labs — the application and potential here are hard to ignore. The maintainers are also exploring LLM integration into the robotics planning layer, which adds another dimension to what this codebase could become.
+My original issue for this contribution was PyLabRobot issue #719 — adding a `preferred_pickup_distance_from_top` attribute to the `Resource` base class. I completed Phase 1 and Phase 2 with that issue, but during Phase 2 I discovered it had been closed by the maintainer: the problem was addressed in PR #872 before I had a chance to contribute. That was a real lesson in open source timing — issues can close between when you claim them and when you're ready to write code. Rather than treating it as a setback, I used it as signal to look more carefully at issue age and PR history before committing to a new one.
 
-Issue #719 caught my attention because it's a small, well-scoped change with real downstream impact. Adding a per-resource grip height preference sounds simple, but it requires understanding how the `Resource` class hierarchy works, how attributes flow through serialization, and how the movement planner consumes metadata at runtime. As a Teaching Fellow for AI301, I also want to experience the same friction my students will face — the unfamiliar codebase, the moment where a five-line change turns into tracing inheritance across multiple files. This issue is exactly that kind of problem.
+For my replacement issue, I landed on zarr-python issue #828. Zarr is a Python library for storing chunked, compressed N-dimensional arrays — the kind of data infrastructure that shows up in climate science, genomics, and ML data pipelines, used by organizations like NASA and the Pangeo project. The issue is a well-scoped enhancement: `ZipStore.__delitem__` currently raises `NotImplementedError` because ZIP files don't natively support deleting members. The proposed fix is a soft-delete — overwrite the entry with empty bytes and update the surrounding methods to treat it as absent. Two previous PRs (#1184 and #2838) attempted this but went stale. That history tells me the problem is real and the maintainers want it solved, but it needs someone to pick it up and carry it through.
 
 ---
 
@@ -25,30 +25,27 @@ Issue #719 caught my attention because it's a small, well-scoped change with rea
 
 ### Problem Description
 
-PyLabRobot is a hardware-agnostic Python SDK for controlling lab automation robots — Hamilton STAR, Tecan EVO, Opentrons OT-2, and others. When a robotic arm picks up a resource (a microplate, a tip rack, a reservoir), it needs a vertical offset: how far from the top of the resource should the gripper descend before closing?
-
-Currently, that value defaults to `0` everywhere. There is no per-resource preferred grip height. Every plate and every tip rack is treated identically, even though their physical geometries differ significantly. A 96-well plate and a 384-well plate do not have the same ideal grip point.
+Zarr arrays can be backed by different storage backends. One of them is `ZipStore`, which stores array chunks inside a ZIP archive. ZIP files do not natively support deleting individual members, so `ZipStore.__delitem__` raises `NotImplementedError`. This makes `ZipStore` a second-class backend — any Zarr operation that needs to delete a chunk (e.g., resizing an array) will fail at runtime when backed by a ZIP store.
 
 ### Expected Behavior
 
-After the fix, each `Resource` subclass should be able to declare its own `preferred_pickup_distance_from_top` — an optional float representing the ideal grip offset in millimeters from the top of the resource. When a movement is planned and no explicit offset is passed by the caller, the robot should fall back to this preferred value instead of always defaulting to `0`.
-
-From the maintainer's description, the goal is to "facilitate smart defaults on a resource by resource basis for robotic arm movements."
+`ZipStore.__delitem__` should succeed without raising `NotImplementedError`. The proposed approach is a soft-delete: overwrite the target entry with an empty byte string `b""` to mark it as deleted. The surrounding methods — `__contains__`, `__getitem__`, and `keys()` / `keylist()` — should be updated to treat entries with empty bytes as absent, so callers see a consistent view with no trace of the deleted key.
 
 ### Current Behavior
 
-- `Resource.__init__` does not accept or store a `preferred_pickup_distance_from_top` parameter.
-- Existing resource definitions (plates, tip racks, reservoirs) have no grip-height metadata.
-- The movement planner has no mechanism to consult a per-resource preferred offset; it always uses `0` or whatever the caller explicitly provides.
+- `ZipStore.__delitem__` raises `NotImplementedError`.
+- Any Zarr operation requiring chunk deletion fails when using a ZIP-backed store.
+- `__contains__`, `__getitem__`, and `keylist()` have no awareness of soft-deleted entries.
 
 ### Affected Components
 
 | Component | Role |
 |---|---|
-| `pylabrobot/resources/resource.py` | Base `Resource` class — needs the new attribute |
-| Individual resource definition files (plates, tip racks, etc.) | Need to be updated with preferred values |
-| Robot arm movement planner | Needs to consult `preferred_pickup_distance_from_top` as a fallback default |
-| Serialization / deserialization (`to_dict` / `from_dict`) | Attribute must round-trip through JSON correctly |
+| `zarr/storage.py` — `ZipStore.__delitem__` | Currently raises `NotImplementedError`; needs soft-delete logic |
+| `zarr/storage.py` — `ZipStore.__contains__` | Needs to return `False` for empty-byte entries |
+| `zarr/storage.py` — `ZipStore.__getitem__` | Needs to raise `KeyError` for empty-byte entries |
+| `zarr/storage.py` — `ZipStore.keylist()` | Needs to exclude empty-byte entries from the returned list |
+| `zarr/tests/test_storage.py` | Needs new tests covering the soft-delete behavior |
 
 ---
 
@@ -56,30 +53,18 @@ From the maintainer's description, the goal is to "facilitate smart defaults on 
 
 ### Environment Setup
 
-```bash
-git clone https://github.com/Akash-t25/pylabrobot.git
-cd pylabrobot
-python3 -m venv env
-source env/bin/activate
-pip install -e ".[dev]"
-```
-
-Installation completed successfully: `Successfully installed PyLabRobot-0.2.1`.
+> To be completed in Phase II — will document Python version, virtual environment setup, and installation steps after local environment is confirmed working.
 
 ### Steps to Reproduce
 
-1. Activate the virtual environment and open `pylabrobot/resources/resource.py`.
-2. Inspect `Resource.__init__` — the parameter list is: `name`, `size_x`, `size_y`, `size_z`, `rotation`, `category`, `model`, `barcode`, `preferred_pickup_location`. No `preferred_pickup_distance_from_top`.
-3. Run a repo-wide search for `preferred_pickup_distance_from_top` — zero hits anywhere in the codebase.
-4. The attribute named in issue #719 does not exist. Issue confirmed reproduced.
+> To be completed in Phase II — will include step-by-step instructions for reproducing the `NotImplementedError` from `ZipStore.__delitem__`.
 
 ### Reproduction Evidence
 
-A repo-wide search (`grep -r "preferred_pickup_distance_from_top" .`) returns no results, confirming the attribute is entirely absent from the codebase.
+> To be completed in Phase II — will include a code trace or screenshot confirming the error is raised in the current codebase.
 
-![Resource.__init__ showing preferred_pickup_distance_from_top is absent](phase2_proof.png)
-
-**Key discovery during analysis:** The maintainer has already added a related but different attribute — `preferred_pickup_location`, a full `Coordinate(x, y, z)` object. In `pylabrobot/liquid_handling/liquid_handler.py` (lines 2028–2038), the movement planner already derives `pickup_distance_from_top` from `preferred_pickup_location.z` when no explicit offset is provided. This means the "smart default" mechanism the issue describes is partially solved through a different approach. I left a comment on issue #719 asking the maintainer whether a separate `preferred_pickup_distance_from_top: float` is still needed given `preferred_pickup_location` already exists — awaiting response before writing any code.
+![ZipStore delete method - part 1](phase2_a.png)
+![ZipStore delete method - part 2](phase2_b.png)
 
 ---
 
@@ -87,55 +72,50 @@ A repo-wide search (`grep -r "preferred_pickup_distance_from_top" .`) returns no
 
 ### Analysis
 
-`Resource` inherits from `SerializableMixin`, which means serialization goes through `serialize()` and `deserialize()` — not `to_dict`/`from_dict` as I initially assumed in Phase I. Existing optional attributes follow this pattern in `serialize()`:
-
-```python
-"preferred_pickup_location": serialize(self.preferred_pickup_location)
-```
-
-One important downstream consequence: approximately six test files hardcode the complete expected serialization dictionary. Adding any new key to `serialize()` will break all of them simultaneously. This is the largest mechanical cost of the change.
-
-**Files that need to be modified:**
-
-| File | Change required |
-|---|---|
-| `pylabrobot/resources/resource.py` | Add param to `__init__`, docstring, `serialize()`, `deserialize()` |
-| `pylabrobot/liquid_handling/liquid_handler.py` (lines 2028–2038) | Update smart-default fallback chain |
-| `pylabrobot/resources/resource_tests.py` | Serialization tests assert exact dict shape |
-| `pylabrobot/resources/well_tests.py` | Same reason |
-| `pylabrobot/resources/carrier_tests.py` | Same reason |
-| `pylabrobot/resources/container_tests.py` | Same reason |
-| `pylabrobot/resources/plate_adapter_tests.py` | Same reason |
-| `pylabrobot/resources/petri_dish_tests.py` | Same reason |
-
-**Pending:** Awaiting maintainer response on issue #719 before finalizing whether `preferred_pickup_distance_from_top` (float) is needed alongside the existing `preferred_pickup_location` (Coordinate), or whether the solution should take a different shape entirely.
+> To be completed in Phase II — will include a full trace of the `ZipStore` class, a review of what PRs #1184 and #2838 attempted, and a precise mapping of all lines that need to change.
 
 ### Proposed Solution (High Level)
 
-1. **Add the attribute to the base class.** In `Resource.__init__`, add an `Optional[float]` parameter:
+The fix implements a soft-delete pattern across four methods in `ZipStore`:
+
+1. **`__delitem__`** — instead of raising `NotImplementedError`, overwrite the ZIP entry with `b""`:
    ```python
-   preferred_pickup_distance_from_top: Optional[float] = None
+   def __delitem__(self, key):
+       with self._mutex:
+           if key not in self:
+               raise KeyError(key)
+           self.zf.writestr(key, b"")
    ```
-   Store it as `self.preferred_pickup_distance_from_top`.
 
-2. **Thread it through serialization.** Update `serialize()` to include the field and `deserialize()` to restore it (the class uses `SerializableMixin`, not `to_dict`/`from_dict`). Update the ~6 test files that hardcode the expected serialization dict.
+2. **`__contains__`** — exclude entries whose value is `b""`:
+   ```python
+   def __contains__(self, key):
+       return key in self.zf.namelist() and self.zf.read(key) != b""
+   ```
 
-3. **Update the movement planner.** In the arm movement logic, when computing the pickup offset, fall back to `resource.preferred_pickup_distance_from_top` if no explicit offset was provided by the caller (and fall back to `0` only if the resource also has `None`).
+3. **`__getitem__`** — raise `KeyError` for soft-deleted entries:
+   ```python
+   def __getitem__(self, key):
+       value = self.zf.read(key)
+       if value == b"":
+           raise KeyError(key)
+       return value
+   ```
 
-4. **Update existing resource definitions.** Audit the existing plate, tip rack, and reservoir definition files and add `preferred_pickup_distance_from_top` values where the physical geometry makes a non-zero grip height appropriate.
+4. **`keylist()` / `keys()`** — filter out empty-byte entries so they are invisible to callers.
 
-5. **Add tests.** Cover the attribute on the base class, the serialization round-trip, the movement planner fallback logic, and at least one updated resource definition.
+The two stale PRs (#1184 and #2838) will be reviewed before writing any code to understand what feedback the maintainers gave and why those PRs didn't land.
 
 ### Implementation Plan (UMPIRE Framework)
 
 | Phase | Step | Description |
 |---|---|---|
-| **U — Understand** | Read the issue, trace the codebase | Understand `Resource`, the movement planner, and serialization before touching any code |
-| **M — Match** | Identify analogous patterns | Find how similar optional attributes (e.g., `max_volume`) are handled in `Resource` and follow the same pattern |
-| **P — Plan** | Draft the change set | List every file that needs editing; confirm with a maintainer comment if uncertain about scope |
-| **I — Implement** | Write the code | Add the attribute, update serialization, update the planner, update resource definitions |
-| **R — Review** | Self-review and test | Run the existing test suite, write new tests, check for regressions |
-| **E — Evaluate** | Open the PR | Submit the pull request, respond to maintainer feedback, iterate |
+| **U — Understand** | Read the issue and stale PRs | Review #1184 and #2838 to understand prior attempts and maintainer feedback |
+| **M — Match** | Identify the pattern | Confirm the soft-delete approach aligns with how other `MutableMapping` stores handle this |
+| **P — Plan** | Map the change set | List every line in `storage.py` and `test_storage.py` that needs to change |
+| **I — Implement** | Write the code | Update the four methods and add tests |
+| **R — Review** | Self-review and test | Run the full test suite; confirm no regressions in other store backends |
+| **E — Evaluate** | Open the PR | Submit, reference issue #828 and prior PRs, respond to maintainer feedback |
 
 ---
 
@@ -143,14 +123,15 @@ One important downstream consequence: approximately six test files hardcode the 
 
 ### Unit Tests
 
-- `test_resource_preferred_pickup_distance_default_is_none` — verify that a plain `Resource` instance has `preferred_pickup_distance_from_top = None` by default.
-- `test_resource_preferred_pickup_distance_can_be_set` — verify that passing a float at construction time stores it correctly.
-- `test_resource_serialization_round_trip` — verify that `to_dict()` / `from_dict()` preserves the attribute (both `None` and a non-None value).
+- `test_zipstore_delitem_removes_key` — verify that after `del store[key]`, `key not in store` is `True`.
+- `test_zipstore_delitem_raises_keyerror_for_missing_key` — verify that deleting a non-existent key raises `KeyError`.
+- `test_zipstore_getitem_raises_keyerror_after_delete` — verify that accessing a soft-deleted key raises `KeyError`.
+- `test_zipstore_contains_false_after_delete` — verify that `key in store` returns `False` after deletion.
+- `test_zipstore_keys_excludes_deleted` — verify that soft-deleted keys do not appear in `store.keys()`.
 
 ### Integration Tests
 
-- `test_arm_movement_uses_preferred_distance_when_no_explicit_offset_given` — verify that the movement planner reads `preferred_pickup_distance_from_top` from the resource when the caller does not supply an explicit offset.
-- `test_arm_movement_explicit_offset_overrides_preferred` — verify that an explicit caller-supplied offset takes precedence over the resource's preferred value.
+- `test_zipstore_array_resize_after_delete` — verify that a Zarr array backed by `ZipStore` can resize (which internally deletes chunks) without error.
 
 ### Manual Testing
 
@@ -163,23 +144,16 @@ One important downstream consequence: approximately six test files hardcode the 
 ### Week 1 Progress
 
 - [x] Identified and researched the issue
-- [x] Read the PyLabRobot paper (Device, 2023) and project documentation
-
-### Week 2 Progress
-
-- [x] Forked the repository
-- [x] Cloned fork locally
-- [x] Set up virtual environment and installed with `pip install -e ".[dev]"`
-- [x] Opened `resource.py` and located the `Resource` class
-- [x] Confirmed `preferred_pickup_distance_from_top` does not exist — issue reproduced
-- [x] Discovered `preferred_pickup_location` already exists as a related mechanism
-- [x] Analyzed serialization pattern via `SerializableMixin`
-- [x] Identified all files that need modification
-- [x] Commented on issue #719 asking maintainer for clarification before proceeding
+- [x] Read zarr documentation and understood the `ZipStore` backend
+- [x] Reviewed prior PRs #1184 and #2838 for context
+- [x] Confirmed the issue is open and unclaimed
+- [ ] Set up local development environment (Phase II)
+- [ ] Reproduced the `NotImplementedError` locally (Phase II)
+- [ ] Confirmed scope with maintainer via issue comment (Phase II)
 
 ### Code Changes
 
-> None yet — holding on implementation until maintainer responds to my question on issue #719 about whether `preferred_pickup_distance_from_top` (float) is still needed given `preferred_pickup_location` (Coordinate) already partially solves the problem.
+> None yet — implementation begins in Phase III after environment setup and reproduction are complete in Phase II.
 
 ### Pull Request
 
@@ -195,9 +169,10 @@ One important downstream consequence: approximately six test files hardcode the 
 
 ## Resources Used
 
-- [PyLabRobot GitHub Repository](https://github.com/PyLabRobot/pylabrobot)
-- [My PyLabRobot Fork](https://github.com/Akash-t25/pylabrobot)
-- [Issue #719](https://github.com/PyLabRobot/pylabrobot/issues/719)
-- [PyLabRobot paper — Device (2023)](https://www.cell.com/device/fulltext/S2666-9986(23)00046-4)
-- [PyLabRobot documentation](https://docs.pylabrobot.org)
+- [zarr-python GitHub Repository](https://github.com/zarr-developers/zarr-python)
+- [My zarr-python Fork](https://github.com/Akash-t25/zarr-python)
+- [Issue #828 — Implementing ZipStore's \_\_delitem\_\_ via overwrite](https://github.com/zarr-developers/zarr-python/issues/828)
+- [Prior PR #1184](https://github.com/zarr-developers/zarr-python/pull/1184)
+- [Prior PR #2838](https://github.com/zarr-developers/zarr-python/pull/2838)
+- [zarr documentation](https://zarr.readthedocs.io)
 - CodePath AI301 course materials
